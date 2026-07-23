@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Cuboid Slicer - WebGL2 spike</title>
+    <base href="/" />
+    <!-- Inline so the browser stops requesting /favicon.ico and 404ing into the
+         console, which buries the messages that matter. -->
+    <link rel="icon" href="data:," />
+    <style>
+        /* Every crop track is the same horizontal bar; only the rotation in the
+           markup differs. Positioned by its centre so rotating it keeps it put. */
+        .cropTrack {
+            position: absolute;
+            width: 120px;
+            height: 18px;
+            margin-left: -60px;
+            margin-top: -9px;
+            background: rgba(255, 255, 255, 0.12);
+            border: 1px solid #555;
+            border-radius: 3px;
+            touch-action: none;
+        }
+
+        /* Indeterminate on purpose: the decoder works in frames recovered rather
+           than a predictable fraction of the whole, so a percentage would be a
+           guess. */
+        .busySpinner {
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255, 255, 255, 0.25);
+            border-top-color: #eee;
+            border-radius: 50%;
+            animation: busySpin 0.8s linear infinite;
+        }
+
+        @keyframes busySpin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Names the axis each track belongs to. Positioned by its own centre at
+           the far end of its track, and never rotated -- a rotated label would
+           be harder to read for no gain. */
+        .cropLabel {
+            position: absolute;
+            transform: translate(-50%, -50%);
+            font-size: 12px;
+            opacity: 0.75;
+            pointer-events: none;
+        }
+
+        /* The window that survives the budget: its length is the proportion
+           kept, its position which part. Sized and moved from crop.js. */
+        .cropBar {
+            position: absolute;
+            top: 0;
+            height: 100%;
+            background: rgba(210, 210, 210, 0.85);
+            border-radius: 2px;
+        }
+    </style>
+</head>
+
+<body style="margin:0; background:#000;">
+
+    <div id="app">
+        <div style="color:#888; font:14px sans-serif; padding:1rem;">loading...</div>
+    </div>
+
+    <div id="blazor-error-ui" style="display:none;">
+        An unhandled error has occurred. <a href="" class="reload">Reload</a>
+    </div>
+
+    <script src="_framework/blazor.webassembly.js"></script>
+
+    <!-- KNI's JS interop shims. Versions must match the nkast.Wasm.* packages
+         that third_party/kni references (10.0.2 at the pinned commit); the
+         filenames are version-stamped, so a KNI bump breaks these paths loudly
+         rather than silently. -->
+    <script src="_content/nkast.Wasm.JSInterop/js/JSObject.10.0.2.js"></script>
+    <script src="_content/nkast.Wasm.Dom/js/Window.10.0.2.js"></script>
+    <script src="_content/nkast.Wasm.Dom/js/Document.10.0.2.js"></script>
+    <script src="_content/nkast.Wasm.Dom/js/Navigator.10.0.2.js"></script>
+    <script src="_content/nkast.Wasm.Dom/js/Gamepad.10.0.2.js"></script>
+    <script src="_content/nkast.Wasm.Dom/js/Media.10.0.2.js"></script>
+    <script src="_content/nkast.Wasm.XHR/js/XHR.10.0.2.js"></script>
+    <script src="_content/nkast.Wasm.Canvas/js/Canvas.10.0.2.js"></script>
+    <script src="_content/nkast.Wasm.Canvas/js/CanvasGLContext.10.0.2.js"></script>
+
+    <!-- Loaded as a plain script, not imported as a module the way crop.js is:
+         its entry point has to be callable straight from a button's onclick,
+         because iOS grants motion permission only from inside a real gesture.
+
+         The query string is a cache-buster, and deploy-web.sh rewrites it to the
+         build fingerprint so it cannot go stale. Hand-numbering it did go stale,
+         and the way it failed is worth knowing: the browser kept an old
+         motion.js that called SetMotion with an argument the C# side no longer
+         took, so every sensor reading threw and tilting silently died while
+         everything not routed through JS carried on working. A version skew
+         between this file and the assembly looks exactly like a broken
+         feature. -->
+    <script src="motion.js?v=04357481e40c"></script>
+
+    <script>
+        // Keeps UI panels and the game from fighting over the same events.
+        //
+        // KNI listens for mouse, wheel and touch on `window`, and calls
+        // preventDefault on every touch. So an event inside a panel reaches the
+        // game as well -- dragging a slider spins the cuboid -- and on a touch
+        // screen the preventDefault cancels the click the browser would have
+        // synthesised, leaving buttons that simply cannot be tapped.
+        //
+        // Registered here, at parse time, so it runs before KNI's own window
+        // listeners: stopImmediatePropagation then prevents those from firing at
+        // all. It must be `window` and the bubble phase, because anything
+        // earlier would stop the event before the target sees it -- Blazor
+        // dispatches its own handlers by delegation from `document`, which
+        // bubbles first, so @onclick still works.
+        //
+        // Any element carrying data-ui is covered, which is the whole point:
+        // wiring this per panel meant every new dialog re-learned the lesson.
+        window.inputCounters = { touch: 0, swallowedTouch: 0, mouse: 0, swallowedMouse: 0 };
+
+        (function ()
+        {
+            var swallow = ['touchstart', 'touchmove', 'touchend', 'touchcancel',
+                           'mousedown', 'mousemove', 'mouseup',
+                           'pointerdown', 'pointermove', 'pointerup',
+                           'wheel', 'contextmenu'];
+
+            swallow.forEach(function (name)
+            {
+                window.addEventListener(name, function (e)
+                {
+                    var isTouch = name.indexOf('touch') === 0;
+                    var counted = isTouch || name === 'mousedown';
+                    if (counted)
+                        window.inputCounters[isTouch ? 'touch' : 'mouse']++;
+
+                    if (e.target && e.target.closest && e.target.closest('[data-ui]'))
+                    {
+                        if (counted)
+                            window.inputCounters[isTouch ? 'swallowedTouch' : 'swallowedMouse']++;
+
+                        e.stopImmediatePropagation();
+                    }
+                });
+            });
+        })();
+
+        window.inputReport = () =>
+            `window events: ${window.inputCounters.touch} touch `
+            + `(${window.inputCounters.swallowedTouch} swallowed), `
+            + `${window.inputCounters.mouse} mousedown `
+            + `(${window.inputCounters.swallowedMouse} swallowed)`;
+
+        // Whether real AR is available here at all, asked before anything is
+        // built on the assumption that it is. immersive-ar on Android is ARCore,
+        // and ARCore wants a gyroscope -- the same sensor whose absence made
+        // Chrome's deviceorientation answer with nulls on this device. So a
+        // handset can run the motion controls perfectly and still have no route
+        // to WebXR, and the two facts have the same cause.
+        window.xrReport = async (why) =>
+        {
+            const where = why || 'cold';
+
+            if (!navigator.xr)
+                return `webxr (${where}): navigator.xr absent -- no WebXR in this browser`;
+
+            const ask = async (mode) =>
+            {
+                try { return await navigator.xr.isSessionSupported(mode); }
+                catch (e) { return 'threw: ' + e.message; }
+            };
+
+            // Both modes, and the context they were asked in. A false with the
+            // site listing an AR permission is ambiguous on its own: the
+            // permission entry says the browser would ask, not that the handset
+            // can answer.
+            const ar = await ask('immersive-ar');
+            const vr = await ask('immersive-vr');
+
+            const lines = [
+                `webxr (${where}): immersive-ar ${ar}, immersive-vr ${vr}`,
+                `  secure ${window.isSecureContext}, top-level ${window.self === window.top}`,
+            ];
+
+            // The likely causes, narrowed by what is already known. Chrome
+            // reports false for immersive-ar when Google Play Services for AR is
+            // absent, and separately when the handset has no gyroscope -- and
+            // this device is already known to lack a usable one, since that is
+            // why Chrome's deviceorientation answered with nulls and the
+            // magnetometer-based event had to be used instead. Both look
+            // identical from here.
+            if (ar !== true)
+            {
+                lines.push('  ar false: either Google Play Services for AR is not',
+                           '  installed, or the handset has no gyroscope. This one',
+                           '  is already known to lack one -- see the aim event.');
+            }
+
+            return lines.join('\n');
+        };
+
+        function tickJS()
+        {
+            window.theInstance.invokeMethod('TickDotNet');
+            window.requestAnimationFrame(tickJS);
+        }
+
+        // The whole document rather than the canvas, so the controls stay
+        // reachable inside fullscreen. KNI resizes the canvas and the back
+        // buffer off the window resize this raises, so there is nothing to do
+        // on this side beyond asking.
+        window.toggleFullscreenJS = () =>
+        {
+            if (document.fullscreenElement)
+                document.exitFullscreen();
+            else
+                document.documentElement.requestFullscreen();
+        };
+
+        // Copying has to happen inside the click itself.
+        //
+        // navigator.clipboard.writeText needs transient user activation, and a
+        // round trip through Blazor spends it: the call arrives a few
+        // microtasks later, the browser no longer counts it as user-initiated,
+        // and it rejects. So this is wired as a plain DOM onclick and reads the
+        // text straight out of the panel -- .NET is never involved.
+        window.copyDiagnosticsJS = () =>
+        {
+            var source = document.getElementById('diagnosticsText');
+            var note = document.getElementById('copyNote');
+            if (!source)
+                return;
+
+            var text = source.innerText;
+            var report = (ok) =>
+            {
+                if (note)
+                    note.textContent = ok ? 'copied to clipboard'
+                                          : 'copy failed -- select the text above and copy by hand';
+            };
+
+            if (navigator.clipboard && navigator.clipboard.writeText)
+            {
+                navigator.clipboard.writeText(text).then(
+                    () => report(true),
+                    () => report(legacyCopy(text)));
+            }
+            else
+            {
+                report(legacyCopy(text));
+            }
+        };
+
+        // execCommand is deprecated but still succeeds in places the async API
+        // refuses -- notably where activation has lapsed, or where the page is
+        // not a secure context at all.
+        function legacyCopy(text)
+        {
+            var area = document.createElement('textarea');
+            area.value = text;
+            area.setAttribute('readonly', '');
+            area.style.cssText = 'position:fixed; top:0; left:0; opacity:0; pointer-events:none;';
+            document.body.appendChild(area);
+            area.select();
+            area.setSelectionRange(0, text.length);
+
+            var ok = false;
+            try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+
+            area.remove();
+            return ok;
+        }
+
+        window.initRenderJS = (instance) =>
+        {
+            window.theInstance = instance;
+
+            var canvas = document.getElementById('theCanvas');
+            var holder = document.getElementById('canvasHolder');
+            canvas.width = holder.clientWidth;
+            canvas.height = holder.clientHeight;
+            canvas.addEventListener("contextmenu", e => e.preventDefault());
+
+            // A dropped file cannot be handed over as a path the way it is on
+            // desktop -- the browser only exposes a Blob. An object URL names
+            // that blob, and the decoder loads it exactly like the bundled clip.
+            var load = (file) =>
+            {
+                if (file)
+                    instance.invokeMethodAsync('LoadObjectUrl', URL.createObjectURL(file));
+            };
+
+            var picker = document.getElementById('videoPicker');
+            if (picker)
+                picker.addEventListener('change', e => load(e.target.files[0]));
+
+            // KNI listens for touches on the window and calls preventDefault on
+            // every one of them, which is what stops the page scrolling under a
+            // drag -- but it also cancels the click the browser would otherwise
+            // synthesise, so tapping a control never activates it. Stopping the
+            // touch here keeps it from reaching that listener: the tap turns
+            // into a click as normal, and the game never sees a stray finger on
+            // the buttons either.
+            // Both handlers are required: without preventDefault on dragover the
+            // browser navigates away to the dropped file instead of dropping it.
+            holder.addEventListener('dragover', e => e.preventDefault());
+            holder.addEventListener('drop', e =>
+            {
+                e.preventDefault();
+                load(e.dataTransfer.files[0]);
+            });
+
+            window.requestAnimationFrame(tickJS);
+        };
+    </script>
+</body>
+
+</html>

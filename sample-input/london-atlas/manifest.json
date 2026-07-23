@@ -1,0 +1,43 @@
+{
+  "name": "london",
+  "sourceWidth": 768,
+  "sourceHeight": 432,
+  "sourceFrames": 351,
+  "framesPerSecond": 30,
+  "tileCols": 5,
+  "tileRows": 9,
+  "sheetWidth": 3840,
+  "sheetHeight": 3888,
+  "variants": {
+    "jpeg": {
+      "extension": "jpg",
+      "lossless": false,
+      "sheets": [
+        { "file": "jpeg/sheet-001.jpg", "bytes": 3472266 },
+        { "file": "jpeg/sheet-002.jpg", "bytes": 3489453 },
+        { "file": "jpeg/sheet-003.jpg", "bytes": 3483944 },
+        { "file": "jpeg/sheet-004.jpg", "bytes": 3440309 },
+        { "file": "jpeg/sheet-005.jpg", "bytes": 3109840 },
+        { "file": "jpeg/sheet-006.jpg", "bytes": 2840345 },
+        { "file": "jpeg/sheet-007.jpg", "bytes": 3292233 },
+        { "file": "jpeg/sheet-008.jpg", "bytes": 2674525 }
+      ],
+      "bytes": 25802915
+    },
+    "webp": {
+      "extension": "webp",
+      "lossless": true,
+      "sheets": [
+        { "file": "webp/sheet-001.webp", "bytes": 5604948 },
+        { "file": "webp/sheet-002.webp", "bytes": 5488854 },
+        { "file": "webp/sheet-003.webp", "bytes": 6162210 },
+        { "file": "webp/sheet-004.webp", "bytes": 6742074 },
+        { "file": "webp/sheet-005.webp", "bytes": 8146488 },
+        { "file": "webp/sheet-006.webp", "bytes": 7209504 },
+        { "file": "webp/sheet-007.webp", "bytes": 6447084 },
+        { "file": "webp/sheet-008.webp", "bytes": 4452816 }
+      ],
+      "bytes": 50253978
+    }
+  }
+}

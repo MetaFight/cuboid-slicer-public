@@ -1,0 +1,39 @@
+{
+  "name": "orientation-test",
+  "sourceWidth": 320,
+  "sourceHeight": 180,
+  "sourceFrames": 90,
+  "framesPerSecond": 30,
+  "tileCols": 3,
+  "tileRows": 5,
+  "sheetWidth": 960,
+  "sheetHeight": 900,
+  "variants": {
+    "jpeg": {
+      "extension": "jpg",
+      "lossless": false,
+      "sheets": [
+        { "file": "jpeg/sheet-001.jpg", "bytes": 51024 },
+        { "file": "jpeg/sheet-002.jpg", "bytes": 48248 },
+        { "file": "jpeg/sheet-003.jpg", "bytes": 42656 },
+        { "file": "jpeg/sheet-004.jpg", "bytes": 41528 },
+        { "file": "jpeg/sheet-005.jpg", "bytes": 49790 },
+        { "file": "jpeg/sheet-006.jpg", "bytes": 55733 }
+      ],
+      "bytes": 288979
+    },
+    "webp": {
+      "extension": "webp",
+      "lossless": true,
+      "sheets": [
+        { "file": "webp/sheet-001.webp", "bytes": 193716 },
+        { "file": "webp/sheet-002.webp", "bytes": 197108 },
+        { "file": "webp/sheet-003.webp", "bytes": 185676 },
+        { "file": "webp/sheet-004.webp", "bytes": 165126 },
+        { "file": "webp/sheet-005.webp", "bytes": 234786 },
+        { "file": "webp/sheet-006.webp", "bytes": 257166 }
+      ],
+      "bytes": 1233578
+    }
+  }
+}

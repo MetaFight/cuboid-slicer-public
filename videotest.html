@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>video pixel access test</title>
+    <style>
+        body { background:#111; color:#eee; font:13px ui-monospace, monospace; margin:0; padding:1rem; }
+        pre  { white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.5; }
+        .ok   { color:#8f8; }
+        .bad  { color:#f88; }
+        video { width:160px; height:90px; }
+    </style>
+</head>
+<body>
+<h3>Can this browser give up video pixels?</h3>
+<p>No Blazor, no KNI, no WebGL framework — just a video, a canvas and a WebGL2 context,
+   so a failure here is the browser's and a success means the fault is in the app.</p>
+<pre id="out">running…</pre>
+
+<script>
+// The question this answers: does Firefox Android refuse video pixels outright,
+// or does something the app does -- crossOrigin, hiding the element, playing
+// rather than seeking -- cause the refusal? Each case varies one thing.
+
+const out = document.getElementById('out');
+const log = (line, cls) => {
+    out.innerHTML += `\n${cls ? `<span class="${cls}">${line}</span>` : line}`;
+};
+
+/// A picture varies. A placeholder does not, however bright it is -- Firefox
+/// Android was seen returning a flat #330033, which any brightness test passes.
+function describe(pixels) {
+    let min = 255, max = 0;
+    const seen = new Set();
+    for (let i = 0; i < pixels.length; i += 4) {
+        for (let c = 0; c < 3; c++) {
+            min = Math.min(min, pixels[i + c]);
+            max = Math.max(max, pixels[i + c]);
+        }
+        if (seen.size < 32) seen.add(`${pixels[i]},${pixels[i+1]},${pixels[i+2]}`);
+    }
+    const picture = seen.size > 4 && max - min > 24;
+    return {
+        picture,
+        text: `range ${min}..${max}, ${seen.size} distinct` +
+              (seen.size <= 4 ? ` (${[...seen].join(' | ')})` : ''),
+    };
+}
+
+function makeVideo({ crossOrigin, visible }) {
+    const video = document.createElement('video');
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = 'auto';
+    if (crossOrigin) video.crossOrigin = 'anonymous';
+    video.style.cssText = visible
+        ? 'position:static;'
+        : 'position:fixed; left:0; top:0; width:1px; height:1px; opacity:0.01; pointer-events:none;';
+    document.body.appendChild(video);
+    video.src = 'sample-input/london.mp4';
+    return video;
+}
+
+const once = (target, event, ms) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`timed out waiting for ${event}`)), ms);
+    target.addEventListener(event, () => { clearTimeout(timer); resolve(); }, { once: true });
+    target.addEventListener('error', () => { clearTimeout(timer); reject(new Error(`${event} errored`)); }, { once: true });
+});
+
+async function run(label, options) {
+    log(`\n--- ${label}`);
+    let video;
+    try {
+        video = makeVideo(options);
+        await once(video, 'loadedmetadata', 20000);
+
+        // Part way in, so a black opening frame cannot be mistaken for failure.
+        video.currentTime = video.duration / 2;
+        await once(video, 'seeked', 20000);
+
+        if (options.play) {
+            await video.play();
+            await new Promise(r => setTimeout(r, 500));
+        }
+
+        const w = Math.min(128, video.videoWidth);
+        const h = Math.min(128, video.videoHeight);
+
+        // Route 1: the 2D canvas.
+        try {
+            const canvas = document.createElement('canvas');
+            canvas.width = w; canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0, w, h);
+            const r = describe(ctx.getImageData(0, 0, w, h).data);
+            log(`  canvas 2D:  ${r.text}`, r.picture ? 'ok' : 'bad');
+        } catch (e) {
+            log(`  canvas 2D:  threw ${e.name}: ${e.message}`, 'bad');
+        }
+
+        // Route 2: WebGL.
+        try {
+            const gl = document.createElement('canvas').getContext('webgl2');
+            const tex = gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_2D, tex);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+
+            const err = gl.getError();
+            if (err !== gl.NO_ERROR) {
+                log(`  webgl:      upload failed, GL error 0x${err.toString(16)}`, 'bad');
+            } else {
+                const fb = gl.createFramebuffer();
+                gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+                gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+                const px = new Uint8Array(w * h * 4);
+                gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+                const r = describe(px);
+                log(`  webgl:      ${r.text}`, r.picture ? 'ok' : 'bad');
+            }
+        } catch (e) {
+            log(`  webgl:      threw ${e.name}: ${e.message}`, 'bad');
+        }
+    } catch (e) {
+        log(`  setup failed: ${e.message}`, 'bad');
+    } finally {
+        if (video) { video.pause(); video.removeAttribute('src'); video.load(); video.remove(); }
+    }
+}
+
+(async () => {
+    out.textContent = `${navigator.userAgent}\nWebCodecs: ${typeof VideoDecoder !== 'undefined'}`;
+    await run('crossOrigin=anonymous, hidden, seeked (what the app does)', { crossOrigin: true, visible: false });
+    await run('no crossOrigin, hidden, seeked',                            { crossOrigin: false, visible: false });
+    await run('no crossOrigin, VISIBLE, seeked',                           { crossOrigin: false, visible: true });
+    await run('no crossOrigin, VISIBLE, playing',                          { crossOrigin: false, visible: true, play: true });
+    log('\ndone. Green means real picture data; red means black or a flat fill.');
+})();
+</script>
+</body>
+</html>
